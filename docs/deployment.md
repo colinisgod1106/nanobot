@@ -187,3 +187,116 @@ current Python executable with `python -m nanobot gateway --foreground`, and
 writes LaunchAgent logs under `~/.nanobot/logs/`.
 
 > **Note:** if startup fails with "address already in use", stop the manually started `nanobot gateway` process first.
+
+## Railway
+
+[Railway](https://railway.com) is a cloud deployment platform that builds from your GitHub repo and runs containers with minimal configuration.
+
+### Prerequisites
+
+- A GitHub repository with nanobot pushed to it
+- A Railway account (free trial: $5 one-time credit, 30 days)
+- At least one LLM provider API key (OpenAI, Anthropic, etc.)
+
+### Step 1: Connect GitHub
+
+1. Go to [railway.com](https://railway.com) → **New Project** → **Deploy from GitHub repo**
+2. Select your nanobot repository
+3. Railway auto-detects the `Dockerfile` and starts building
+
+### Step 2: Set Environment Variables
+
+Railway automatically injects the `Dockerfile`'s `EXPOSE` ports. Add these **Service Variables** in the Railway dashboard:
+
+| Variable | Value | Required |
+|---|---|---|
+| `NANOBOT_GATEWAY__HOST` | `0.0.0.0` | Yes — binds health endpoint to all interfaces |
+| `NANOBOT_PROVIDERS__OPENAI__API_KEY` | `sk-...` | At least one provider key |
+| `NANOBOT_AGENTS__DEFAULTS__MODEL` | `openai/gpt-4o` | No — defaults to `anthropic/claude-opus-4-5` |
+
+Nanobot reads all config from `NANOBOT_*` environment variables via `pydantic-settings`. The model string follows the `provider/model` convention.
+
+**Example — OpenAI:**
+
+| Variable | Value |
+|---|---|
+| `NANOBOT_PROVIDERS__OPENAI__API_KEY` | `sk-...` |
+| `NANOBOT_AGENTS__DEFAULTS__MODEL` | `openai/gpt-4o` |
+
+**Example — Anthropic:**
+
+| Variable | Value |
+|---|---|
+| `NANOBOT_PROVIDERS__ANTHROPIC__API_KEY` | `sk-ant-...` |
+| `NANOBOT_AGENTS__DEFAULTS__MODEL` | `anthropic/claude-sonnet-4-20250514` |
+
+**Example — DeepSeek (custom base URL):**
+
+| Variable | Value |
+|---|---|
+| `NANOBOT_PROVIDERS__DEEPSEEK__API_KEY` | `sk-...` |
+| `NANOBOT_PROVIDERS__DEEPSEEK__BASE_URL` | `https://api.deepseek.com` |
+| `NANOBOT_AGENTS__DEFAULTS__MODEL` | `deepseek/deepseek-chat` |
+
+**Additional optional variables:**
+
+| Variable | Default | Description |
+|---|---|---|
+| `NANOBOT_AGENTS__DEFAULTS__MAX_TOKENS` | `8192` | Max output tokens |
+| `NANOBOT_AGENTS__DEFAULTS__TEMPERATURE` | `0.1` | Generation temperature |
+| `NANOBOT_AGENTS__DEFAULTS__REASONING_EFFORT` | (none) | `low`, `medium`, or `high` |
+| `NANOBOT_WORKSPACE_SANDBOX_ENFORCED` | `true` | Set to `false` on free tier (no `CAP_SYS_ADMIN`) |
+| `NANOBOT_CHANNELS__WEBSOCKET__HOST` | `127.0.0.1` | Set to `0.0.0.0` to expose WebUI |
+| `NANOBOT_CHANNELS__WEBSOCKET__PORT` | `8765` | WebSocket/WebUI port |
+| `NANOBOT_CHANNELS__WEBSOCKET__TOKEN_ISSUE_SECRET` | (none) | Required when WebSocket host is `0.0.0.0` |
+
+### Step 3: Add a Volume (Recommended)
+
+A Volume persists sessions, memory, and channel login state across deploys.
+
+1. In your Railway project, go to **Volumes** → **Add Volume**
+2. Set mount path to `/home/nanobot/.nanobot`
+3. Attach it to your nanobot service
+
+Without a Volume, all data is lost on redeploy (ephemeral storage).
+
+### Step 4: Configure Networking and Health Check
+
+| Setting | Value |
+|---|---|
+| **Public port** | `8765` — WebSocket channel / WebUI |
+| **Health check port** | `18790` |
+| **Health check path** | `/health` |
+
+1. Go to your service → **Settings** → **Networking**
+2. Add a **Public Port** for `8765` to expose the WebSocket/WebUI
+3. Set the **Health Check** to port `18790`, path `/health`
+4. Railway marks the deployment `Active` only after `/health` returns `{"status": "ok"}`
+
+### First Deploy
+
+After setting variables, Railway builds and starts the container. Check the **Deploy Logs** for:
+
+```
+✓ Health endpoint: http://0.0.0.0:18790/health
+```
+
+If the container restarts repeatedly, verify that at least one provider API key is set and the sandbox is disabled (free tier lacks `CAP_SYS_ADMIN`).
+
+### Free Tier Limitations
+
+| Limitation | Impact |
+|---|---|
+| **$5 trial credit** | Lasts ~1-2 weeks for a lightweight agent. After depletion, services stop. Upgrade to Hobby ($5/mo) to continue. |
+| **1 GB RAM, 1 vCPU** | Enough for nanobot but may throttle under heavy tool calls. |
+| **Sleep on idle** | WebSocket connections drop and cron jobs stop during sleep. Cold start on next request. |
+| **No `CAP_SYS_ADMIN`** | `bwrap` sandbox cannot create user namespaces. Set `NANOBOT_WORKSPACE_SANDBOX_ENFORCED=false` or disable exec sandbox in config. |
+| **1 GB ephemeral disk** | Sessions and memory fill the root disk unless a Volume is mounted. |
+| **Peak hour deploy blocks** | Free tier cannot deploy during 8 AM – 8 PM local peak hours. |
+
+### Upgrade to Hobby Plan
+
+To remove trial credit expiry, sleep, and peak-hour restrictions:
+
+1. Go to Railway dashboard → **Upgrade** → **Hobby** ($5/month)
+2. No code changes needed — the same container keeps running

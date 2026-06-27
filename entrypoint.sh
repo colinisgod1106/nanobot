@@ -1,5 +1,6 @@
 #!/bin/sh
 dir="$HOME/.nanobot"
+mkdir -p "$dir"
 if [ -d "$dir" ] && [ ! -w "$dir" ]; then
     owner_uid=$(stat -c %u "$dir" 2>/dev/null || stat -f %u "$dir" 2>/dev/null)
     cat >&2 <<EOF
